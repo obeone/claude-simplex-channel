@@ -1,0 +1,12 @@
+{
+  "os": "darwin",
+  "arch": "arm64",
+  "bytes": 0,
+  "bytes_idle": 0,
+  "bytes_raw": 0,
+  "stderr_bytes_idle": 106,
+  "duration_s": 65,
+  "pass": true,
+  "harness_version": "1",
+  "notes": "fd1 stayed empty across idle+raw phases"
+}

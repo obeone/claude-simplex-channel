@@ -1,0 +1,84 @@
+name: stdout-purity smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: stdout-smoke (${{ matrix.os }})
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: stdout-purity-linux-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # simplex-chat@6.5.x has no prebuilt N-API addon: it downloads
+      # platform Haskell libs from GitHub Releases (download-libs.js)
+      # then runs node-gyp on cpp/simplex.cc. Linux runners need python3
+      # and a C++ toolchain; ubuntu-latest already ships both, but we
+      # install build-essential explicitly so a future runner image
+      # change doesn't silently break the build.
+      - name: Install Linux build deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3 build-essential
+
+      - name: npm ci
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Run stdout-purity smoke
+        run: npm run smoke:stdout
+
+      - name: Upload smoke artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: .smoke/stdout-purity-*.json
+          if-no-files-found: warn
+
+      - name: Verify smoke artifact pass=true
+        if: always()
+        shell: bash
+        env:
+          PLATFORM: ${{ matrix.os }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(.smoke/stdout-purity-*.json)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "STDOUT_PURITY_GATE: FAIL platform=${PLATFORM} reason=no-artifact" >&2
+            exit 1
+          fi
+          for f in "${files[@]}"; do
+            echo "Checking $f"
+            cat "$f"
+            pass=$(node -e "const a=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')); process.stdout.write(String(a.pass===true));" "$f")
+            if [ "$pass" != "true" ]; then
+              echo "STDOUT_PURITY_GATE: FAIL platform=${PLATFORM} artifact=$f" >&2
+              exit 1
+            fi
+          done
+          echo "STDOUT_PURITY_GATE: PASS platform=${PLATFORM}"
