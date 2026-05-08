@@ -19,8 +19,6 @@ jobs:
         include:
           - os: ubuntu-latest
             artifact_name: stdout-purity-linux-x64
-          - os: macos-13
-            artifact_name: stdout-purity-darwin-x64
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout

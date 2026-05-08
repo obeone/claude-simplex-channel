@@ -19,7 +19,8 @@ See the implementation plan: [`docs/plans/v2-claude-simplex-channel.md`](docs/pl
   the rescue code.
 - **Single-process Node MCP** embedding `simplex-chat@6.5.x` (Option A). The
   plan auto-converts to a sidecar (Option C) if the stdout-purity smoke fails
-  on linux-x64, macos-x64, or macos-arm64.
+  on linux-x64 (ubuntu-latest in CI) or darwin-arm64 (validated locally; macos-x64
+  dropped from automated CI — macos-13 runners queue indefinitely on GH free tier).
 
 ## Quick start
 
