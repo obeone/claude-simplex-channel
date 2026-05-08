@@ -41,3 +41,23 @@ The CLI itself is launched through a POSIX wrapper, never `node` directly:
 The wrapper performs the kernel-level fd dance (`3>&1 1>&2`) before exec'ing
 Node, so any non-MCP write to fd 1 from libc / Haskell / SQLite lands on
 stderr instead of corrupting the MCP frame stream.
+
+## Operational behavior
+
+Haskell error / libc abort / SQLite SIGBUS / addon panic terminates the MCP process. Claude Code's MCP supervisor restarts it. In-flight pendingPermReqs are lost; the next permission request from Claude after restart re-DMs the owner. SimpleX SMP/XFTP subscriptions warm-restart from SQLite.
+
+### End-to-end smoke for the crash policy
+
+The integration tests covering this policy
+(`test/integration/addon_crash_restart.test.ts` and
+`test/integration/warm_restart.test.ts`) require a live SimpleX core and a
+respawn supervisor. They are gated behind `SIMPLEX_E2E_HARNESS=1` so CI
+stays green without faking the addon. Run them locally with:
+
+```bash
+SIMPLEX_E2E_HARNESS=1 npm test -- test/integration/addon_crash_restart.test.ts
+SIMPLEX_E2E_HARNESS=1 npm test -- test/integration/warm_restart.test.ts
+```
+
+Without `SIMPLEX_E2E_HARNESS`, both tests `it.skip` with a logged reason
+and exit 0 — explicit skip beats a green fake.
