@@ -23,7 +23,16 @@
  *          owner-gated verdicts.
  *        - `adapter.events.on("newChatItems", ...)` filters direct rcv
  *          text and dispatches through `makeHandleInbound`.
- *   8. Subscribe the PR 9 ContactUpdated → owner demotion handler so a
+ *      `ownerGate` OR-merges `ownerStore.matches` and
+ *      `allowlist.hasContactId` so paired non-owner contacts reach the
+ *      chat-forward path; verdict emission still requires the strict
+ *      tuple match in `emitVerdict`.
+ *   8. Install pairing handlers (PR 5) — `installPairingHandlers` mints
+ *      pair codes on `receivedContactRequest`, accepts the contact, DMs
+ *      the code on `contactConnected`, and consumes owner-DMed codes to
+ *      admit non-owner tuples to the allowlist. `installBindHandler`
+ *      adds the `bind owner <RESCUECODE>` genesis path.
+ *   9. Subscribe the PR 9 ContactUpdated → owner demotion handler so a
  *      profile change clears the owner cache before any subsequent inbound
  *      DM reaches the verdict gate.
  *
@@ -52,9 +61,17 @@ const { makeHandleInbound, setEmitVerdict } = routerMod;
 type InboundMsg = import("./channel/router.js").InboundMsg;
 type Action = import("./channel/router.js").Action;
 const { makeEmitVerdict } = await import("./channel/verdict.js");
-const { profileSha256 } = await import("./channel/pairing.js");
+const { profileSha256, PairCodeStore, Allowlist, installPairingHandlers } =
+  await import("./channel/pairing.js");
+const { installBindHandler } = await import("./owner/bind.js");
 const { installContactUpdatedDemotion } = await import("./simplex/profile.js");
 const { log } = await import("./util/log.js");
+
+// Pair-code store and allowlist live for the lifetime of the process. The
+// allowlist is intentionally non-persistent: a process restart re-pairs from
+// scratch (acceptable trade-off — rescue code remains as the recovery path).
+const pairCodeStore = new PairCodeStore();
+const allowlist = new Allowlist();
 
 await loadOwnerStore();
 
@@ -84,14 +101,16 @@ const transport = new StdioServerTransport(process.stdin, sdkStdout);
 const server = buildMcpServer({
   tools: {
     api: adapter.api,
-    // Synchronous allowlist predicate. Today the only outbound-allowed
-    // contact is the bound owner. Worker-state's PR 5 (pairing) will widen
-    // this to also include pair-code-admitted contacts via `Allowlist.has()`;
-    // that wiring lives in this entrypoint and is the correct extension
-    // point — `src/mcp/tools.ts` stays predicate-agnostic.
+    // Synchronous allowlist predicate. Owner OR pair-code-admitted contact.
+    // The strict (contactId, sha) tuple match in `ownerStore.matches` and
+    // `Allowlist.has` remains the only path that gates verdict emission
+    // (PR 8b); this contactId-only OR is solely for the outbound `reply`
+    // path, which has no sha at the call site.
     isAllowedContact: (contactId: number): boolean => {
       const snap = getOwnerSnapshot();
-      return snap.ownerContactId !== null && snap.ownerContactId === contactId;
+      const isOwner =
+        snap.ownerContactId !== null && snap.ownerContactId === contactId;
+      return isOwner || allowlist.hasContactId(contactId);
     },
   },
 });
@@ -115,10 +134,11 @@ log.info({ evt: "mcp_connected", name: "simplex", version: "0.1.0" });
 //                 — the notification promise is logged on rejection but does
 //                 not block the inbound subscriber.
 //
-//   ownerGate:    coarse allowlist gate (PR 8a contract). For now the only
-//                 admitted contact is the bound owner; worker-state's
-//                 `Allowlist.hasContactId(...)` will be OR-merged here once
-//                 pairing is wired into this entrypoint.
+//   ownerGate:    coarse allowlist gate (PR 8a contract). Admits the bound
+//                 owner OR any pair-code-admitted contact. Verdict emission
+//                 still requires the strict (contactId, sha) tuple match in
+//                 `emitVerdict` — admitted-but-not-owner contacts get their
+//                 messages forwarded as chat, never converted to verdicts.
 //
 //   emitVerdict:  strict tuple-match + verdict notification (PR 8b proper).
 //                 See `src/channel/verdict.ts`.
@@ -148,7 +168,8 @@ setEmitVerdict(
 
 const handleInbound = makeHandleInbound({
   ownerGate: (sender) =>
-    ownerStore.matches(sender.contactId, sender.profileSha256),
+    ownerStore.matches(sender.contactId, sender.profileSha256) ||
+    allowlist.hasContactId(sender.contactId),
   forwardChat,
 });
 
@@ -183,6 +204,29 @@ adapter.events.on("newChatItems", (event) => {
 });
 
 log.info({ evt: "inbound_router_wired" });
+
+// PR 5: pairing handlers + genesis bind parser. Subscribed AFTER the
+// inbound router so a `^[A-Z0-9]{6}$` body from the owner reaches the
+// verdict-2-step pipeline first; the pairing handler's owner-only consume
+// is the secondary path. Order between pairing and bind doesn't matter
+// (each iterates its own copy of `chatItems` and has disjoint match
+// patterns), but pairing-first keeps related concerns adjacent.
+installPairingHandlers({
+  api: adapter.api,
+  events: adapter.events,
+  store: pairCodeStore,
+  allowlist,
+  notify: (method, params) =>
+    server.notification({ method, params }).catch((err: unknown) => {
+      log.error({ evt: "channel_notify_failed", method, error: String(err) });
+    }),
+});
+// installBindHandler defaults verifyRescueCode/bindOwner to ownerStore's
+// implementations — no need to thread them explicitly. Same for
+// isOwnerBound which checks the live ownerStore snapshot.
+installBindHandler({ events: adapter.events });
+
+log.info({ evt: "pairing_and_bind_wired" });
 
 // PR 9: ContactUpdated → owner demotion. Subscribed AFTER the inbound
 // router so that on a profile-change event the owner cache is cleared
