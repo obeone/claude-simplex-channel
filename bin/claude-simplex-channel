@@ -1,0 +1,12 @@
+#!/usr/bin/env sh
+# claude-simplex-channel — POSIX wrapper.
+#
+# Performs the kernel-level fd dance BEFORE exec'ing Node so that:
+#   - fd 3 holds the ORIGINAL stdout (the MCP frame channel).
+#   - fd 1 is collapsed onto fd 2, so any write to stdout (from libc, the
+#     Haskell RTS, OpenSSL, SQLite, or rogue console.log) lands on stderr
+#     instead of corrupting the MCP frame stream.
+#
+# This is the kernel-level half of the stdout-purity invariant; the JS-level
+# half (`assertStdoutGate()` + SDK transport on fd 3) lives in src/index.ts.
+exec node "$(dirname "$0")/../dist/index.js" 3>&1 1>&2
