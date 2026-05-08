@@ -15,8 +15,8 @@ import {
   PAIR_CODE_LEN,
   PAIR_CODE_RE,
   PairCodeStore,
-  profileSha256,
 } from "../../src/channel/pairing.js";
+import { profileSha256 } from "../../src/util/profile-hash.js";
 import { tryBind, BIND_RE } from "../../src/owner/bind.js";
 
 describe("simultaneous_pair_codes_unique_per_connection", () => {

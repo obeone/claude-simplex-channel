@@ -61,7 +61,8 @@ const { makeHandleInbound, setEmitVerdict } = routerMod;
 type InboundMsg = import("./channel/router.js").InboundMsg;
 type Action = import("./channel/router.js").Action;
 const { makeEmitVerdict } = await import("./channel/verdict.js");
-const { profileSha256, PairCodeStore, Allowlist, installPairingHandlers } =
+const { profileSha256 } = await import("./util/profile-hash.js");
+const { PairCodeStore, Allowlist, installPairingHandlers } =
   await import("./channel/pairing.js");
 const { installBindHandler } = await import("./owner/bind.js");
 const { installContactUpdatedDemotion } = await import("./simplex/profile.js");

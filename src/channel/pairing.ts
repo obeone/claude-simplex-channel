@@ -24,11 +24,12 @@
  * does not import the McpServer directly — keeps the pairing layer testable
  * without an MCP transport, and decoupled from worker-mcp's namespace.
  */
-import { createHash, randomInt } from "node:crypto";
+import { randomInt } from "node:crypto";
 import type { ChatApi } from "simplex-chat/dist/api.js";
 import { T, type CEvt } from "@simplex-chat/types";
 
 import { log } from "../util/log.js";
+import { profileSha256 } from "../util/profile-hash.js";
 import type { ChannelEventHub } from "../simplex/events.js";
 
 /** TTL for an outstanding pair code (5 minutes per plan). */
@@ -256,28 +257,6 @@ export class Allowlist {
   remove(contactId: number, profileSha256: string): void {
     this.entries.delete(Allowlist.key(contactId, profileSha256));
   }
-}
-
-/**
- * Compute a stable sha256 over the SimpleX profile fields that constitute
- * identity. We exclude `profileId` (a LocalProfile-only int that varies
- * across re-imports) and any non-deterministic ordering by hashing a
- * canonicalised JSON.
- *
- * NOTE: this hash is used in two places downstream — the owner-tuple
- * compare (PR 4) and `ContactUpdated` demotion (PR 9). All three must agree
- * on the input shape; if you change this function, audit those call sites.
- */
-export function profileSha256(profile: T.Profile | T.LocalProfile): string {
-  const canon = {
-    displayName: profile.displayName,
-    fullName: profile.fullName,
-    shortDescr: profile.shortDescr ?? null,
-    image: profile.image ?? null,
-    contactLink: profile.contactLink ?? null,
-    peerType: profile.peerType ?? null,
-  };
-  return createHash("sha256").update(JSON.stringify(canon)).digest("hex");
 }
 
 /** Configuration for `installPairingHandlers`. */

@@ -20,7 +20,7 @@ import type { CEvt, T } from "@simplex-chat/types";
 
 import { log } from "../util/log.js";
 import type { ChannelEventHub } from "../simplex/events.js";
-import { profileSha256 } from "../channel/pairing.js";
+import { profileSha256 } from "../util/profile-hash.js";
 
 /**
  * Regex matching the bind directive.

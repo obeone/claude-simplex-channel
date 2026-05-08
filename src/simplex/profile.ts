@@ -1,22 +1,11 @@
 /**
- * Profile identity helper + ContactUpdated demotion handler.
+ * ContactUpdated demotion handler.
  *
  * Per docs/plans/v2-claude-simplex-channel.md §7 (file layout) and §8 step 9.
  *
- * ## profileSha256
- *
- * Stable sha256 over the subset of `T.Profile` fields that constitute
- * identity. Used in two places downstream:
- *   - PR 4: owner-tuple match (`ownerStore.matches`).
- *   - PR 9: ContactUpdated demotion (this module).
- *
- * NOTE on duplication: `src/channel/pairing.ts` (worker-state, PR 5) defines
- * an identical helper. Both are kept in lock-step until a follow-up dedupes
- * them — both call sites MUST hash the same shape or the owner cache and
- * the allowlist will diverge after a re-import. If either drifts, the
- * `profile_change_demotes_to_allowlist_pending_rescue` test will catch the
- * regression because the bound owner sha would no longer match the freshly
- * computed sha for the same profile.
+ * The `profileSha256` helper previously duplicated here has been extracted to
+ * `src/util/profile-hash.ts` and is re-exported from there. Import it from
+ * that canonical location.
  *
  * ## installContactUpdatedDemotion
  *
@@ -37,31 +26,13 @@
  *     operator can recover by deleting `owner.json` to force a genesis
  *     mint on next launch.
  */
-import { createHash } from "node:crypto";
 import type { CEvt, T } from "@simplex-chat/types";
 
 import { log } from "../util/log.js";
+export { profileSha256 } from "../util/profile-hash.js";
+import { profileSha256 } from "../util/profile-hash.js";
 import * as defaultOwnerStore from "../owner/store.js";
 import type { ChannelEventHub } from "./events.js";
-
-/**
- * Hash the subset of `T.Profile` fields that define identity.
- *
- * Excludes `profileId` (LocalProfile-only, not stable across re-imports).
- * The canonical shape is JSON-stringified in property order — `JSON.stringify`
- * iterates keys in insertion order, so we list them deterministically.
- */
-export function profileSha256(profile: T.Profile | T.LocalProfile): string {
-  const canon = {
-    displayName: profile.displayName,
-    fullName: profile.fullName,
-    shortDescr: profile.shortDescr ?? null,
-    image: profile.image ?? null,
-    contactLink: profile.contactLink ?? null,
-    peerType: profile.peerType ?? null,
-  };
-  return createHash("sha256").update(JSON.stringify(canon)).digest("hex");
-}
 
 /**
  * Minimal owner-store surface the demotion handler depends on.
