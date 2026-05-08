@@ -1,10 +1,6 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
 
-import { log } from "../util/log.js";
+import { registerReplyTool, type ToolsDeps } from "./tools.js";
 
 /**
  * Instructions string injected into Claude's system prompt.
@@ -30,14 +26,14 @@ const INSTRUCTIONS =
  *
  * Capabilities mirror the v2 plan §8 step 1: both `claude/channel` and
  * `claude/channel/permission` experimental capabilities, plus a `tools`
- * namespace declaration. The namespace is declared so future PRs can add
- * the `reply` tool without renegotiating capabilities; for PR 1 the
- * `ListTools` handler returns an empty array.
+ * namespace declaration. `registerReplyTool` is invoked here so the only
+ * tool ever advertised on this server is `reply` — `pair_contact` is
+ * forbidden by plan principle 5 / S4.
  *
  * Returns the unconnected `Server`. The caller (`src/index.ts`) wires the
  * stdio transport against fd 3 — see `assertStdoutGate()` for the fence.
  */
-export function buildMcpServer(): Server {
+export function buildMcpServer(opts: { tools: ToolsDeps }): Server {
   const server = new Server(
     { name: "simplex", version: "0.1.0" },
     {
@@ -46,28 +42,15 @@ export function buildMcpServer(): Server {
           "claude/channel": {},
           "claude/channel/permission": {},
         },
-        // Namespace declared; ListTools returns ONLY `reply` (and optional
-        // `mark_read`) in later PRs. NEVER `pair_contact` (per S4).
+        // Namespace declared; `registerReplyTool` returns ONLY `reply` from
+        // ListTools. NEVER `pair_contact` (per S4).
         tools: {},
       },
       instructions: INSTRUCTIONS,
     },
   );
 
-  // PR 1: no tools yet. ListTools returns []; CallTool always rejects.
-  server.setRequestHandler(ListToolsRequestSchema, async () => {
-    log.info({ evt: "list_tools", count: 0 });
-    return { tools: [] };
-  });
-
-  server.setRequestHandler(CallToolRequestSchema, async (req) => {
-    const name = req.params.name;
-    log.warn({ evt: "call_tool_unknown", tool: name });
-    // Standard JSON-RPC method-not-found shape per MCP error conventions.
-    throw Object.assign(new Error(`tool not found: ${name}`), {
-      code: -32601,
-    });
-  });
+  registerReplyTool(server, opts.tools);
 
   return server;
 }
