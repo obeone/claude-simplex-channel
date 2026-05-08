@@ -33,6 +33,7 @@ const { StdioServerTransport } = await import(
   "@modelcontextprotocol/sdk/server/stdio.js"
 );
 const { buildMcpServer } = await import("./mcp/server.js");
+const { installPermissionRequestHandler } = await import("./mcp/permission.js");
 const { log } = await import("./util/log.js");
 
 await loadOwnerStore();
@@ -73,6 +74,14 @@ const server = buildMcpServer({
       return snap.ownerContactId !== null && snap.ownerContactId === contactId;
     },
   },
+});
+
+// PR 7: register the permission_request notification handler before connect
+// so any notification arriving on the very first ready frame is dispatched.
+installPermissionRequestHandler({
+  server,
+  api: adapter.api,
+  getOwnerContactId: () => getOwnerSnapshot().ownerContactId,
 });
 
 await server.connect(transport);
