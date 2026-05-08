@@ -59,7 +59,7 @@ jobs:
         with:
           name: ${{ matrix.artifact_name }}
           path: .smoke/stdout-purity-*.json
-          if-no-files-found: error
+          if-no-files-found: warn
 
       - name: Verify smoke artifact pass=true
         if: always()
