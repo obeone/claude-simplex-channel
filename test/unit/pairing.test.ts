@@ -112,6 +112,19 @@ describe("Allowlist", () => {
     expect(a.has(7, "different")).toBe(false);
     expect(a.has(8, "abc")).toBe(false);
   });
+
+  it("hasContactId() matches contactId regardless of profile sha", () => {
+    const a = new Allowlist();
+    a.add({
+      contactId: 7,
+      profileSha256: "abc",
+      admittedAt: new Date().toISOString(),
+    });
+    expect(a.hasContactId(7)).toBe(true);
+    expect(a.hasContactId(8)).toBe(false);
+    const empty = new Allowlist();
+    expect(empty.hasContactId(7)).toBe(false);
+  });
 });
 
 describe("profileSha256", () => {

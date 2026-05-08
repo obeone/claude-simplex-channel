@@ -229,6 +229,26 @@ export class Allowlist {
     return this.entries.has(Allowlist.key(contactId, profileSha256));
   }
 
+  /**
+   * Synchronous contactId-only membership check.
+   *
+   * Returns true iff at least one entry was admitted for this `contactId`,
+   * regardless of `profileSha256`. The intended caller is the outbound
+   * reply path (PR 6 `reply` tool), which only knows the chat_id /
+   * contactId at hand and does NOT have the profile sha at the call site.
+   *
+   * This is a COARSE gate by design — the strict (contactId, sha) tuple
+   * match in `has()` remains the only path that should gate verdict
+   * emission (PR 8b). Mixing the two would re-introduce the
+   * incognito-repair attack mitigated by S3.
+   */
+  hasContactId(contactId: number): boolean {
+    for (const entry of this.entries.values()) {
+      if (entry.contactId === contactId) return true;
+    }
+    return false;
+  }
+
   size(): number {
     return this.entries.size;
   }
