@@ -6,15 +6,26 @@
  *      (notably `simplex-chat`, which pulls in the Haskell-built native
  *      addon at module-load time in some environments).
  *   2. Load the owner store synchronously into the in-memory cache so the
- *      MCP `reply` tool's allowlist gate (and later the inbound router) can
- *      decide on the same event-loop turn — no async I/O on the hot path.
+ *      MCP `reply` tool's allowlist gate and the inbound router can decide
+ *      on the same event-loop turn — no async I/O on the hot path.
  *   3. Bring up the SimpleX adapter. This loads the native addon (after the
  *      stdout fence is in place) and returns the live `ChatApi` handle the
  *      `reply` tool needs to emit `apiSendMessages`.
  *   4. Construct the SDK transport against fd 3 (the wrapper preserved the
  *      original stdout there via `3>&1 1>&2`).
  *   5. Build the MCP server with the tool deps (api + sync allowlist
- *      predicate) and connect it.
+ *      predicate). Register the PR 7 `permission_request` notification
+ *      handler before connecting so the very first ready frame is dispatched.
+ *   6. Connect the MCP server to its transport.
+ *   7. Wire the inbound 2-step verdict pipeline (PR 8a/8b):
+ *        - `forwardChat` closure → `notifications/claude/channel`.
+ *        - `setEmitVerdict(makeEmitVerdict(...))` so the router can emit
+ *          owner-gated verdicts.
+ *        - `adapter.events.on("newChatItems", ...)` filters direct rcv
+ *          text and dispatches through `makeHandleInbound`.
+ *   8. Subscribe the PR 9 ContactUpdated → owner demotion handler so a
+ *      profile change clears the owner cache before any subsequent inbound
+ *      DM reaches the verdict gate.
  *
  * Launched ONLY through `bin/claude-simplex-channel`. Direct `node` invocation
  * trips the gate and exits 2.
