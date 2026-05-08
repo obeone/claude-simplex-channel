@@ -42,6 +42,7 @@ type InboundMsg = import("./channel/router.js").InboundMsg;
 type Action = import("./channel/router.js").Action;
 const { makeEmitVerdict } = await import("./channel/verdict.js");
 const { profileSha256 } = await import("./channel/pairing.js");
+const { installContactUpdatedDemotion } = await import("./simplex/profile.js");
 const { log } = await import("./util/log.js");
 
 await loadOwnerStore();
@@ -171,3 +172,11 @@ adapter.events.on("newChatItems", (event) => {
 });
 
 log.info({ evt: "inbound_router_wired" });
+
+// PR 9: ContactUpdated → owner demotion. Subscribed AFTER the inbound
+// router so that on a profile-change event the owner cache is cleared
+// before any subsequent inbound DM (delivered as a later `newChatItems`
+// event in the same SimpleX stream) reaches the verdict gate.
+installContactUpdatedDemotion({ events: adapter.events });
+
+log.info({ evt: "contact_updated_demotion_wired" });
