@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+*.log
+.env
+.env.local
+
+# Smoke artifacts: only the canonical platform results are committed (commit 5).
+.smoke/
+
+# Editor / OS noise.
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,31 @@
+{
+  "name": "claude-simplex-channel",
+  "version": "0.1.0",
+  "description": "Claude Code MCP channel server bridging to a SimpleX peer (1:1 + permission relay).",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "claude-simplex-channel": "./bin/claude-simplex-channel"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "test": "vitest run",
+    "smoke:stdout": "node scripts/smoke-stdout.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "bcrypt": "^5.1.1",
+    "simplex-chat": "6.5.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "^5.0.2",
+    "@types/node": "^20.16.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
