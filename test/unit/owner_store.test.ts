@@ -22,13 +22,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   __test_reset,
+  __test_setReloadDebounceMs,
   bindOwner,
   clearOwnerSync,
   defaultOwnerFilePath,
   getOwnerSnapshot,
   loadOwnerStore,
   matches,
+  reloadOwnerStore,
   rotateAfterDemotion,
+  startOwnerStoreWatcher,
+  stopOwnerStoreWatcher,
   verifyRescueCode,
 } from "../../src/owner/store.js";
 
@@ -182,6 +186,107 @@ describe("owner store", () => {
       ).toBe(false);
     }
     expect(getOwnerSnapshot().ownerContactId).toBeNull();
+  });
+
+  // --- Hot-reload tests --------------------------------------------------
+
+  /** Sleep helper for tests racing fs.watch debouncing. */
+  const sleep = (ms: number): Promise<void> =>
+    new Promise((r) => setTimeout(r, ms));
+
+  it("reloadOwnerStore picks up an external bind without reloading the module", async () => {
+    await loadOwnerStore(ownerPath);
+    expect(getOwnerSnapshot().ownerContactId).toBeNull();
+
+    // Simulate another process binding by writing owner.json directly.
+    const sha = "f".repeat(64);
+    const newRecord = {
+      ownerContactId: 555,
+      ownerProfileSha256: sha,
+      createdAt: new Date().toISOString(),
+      // Use a fresh bcrypt hash so verifyRescueCode after reload returns
+      // false for the old code (which we don't even know — file was minted
+      // by a hypothetical other process).
+      rescueCodeHash:
+        "$2b$12$0123456789012345678901uG5VzZGmI8kT0IEvB.XR5J0M0cWfwYyu",
+    };
+    await fs.writeFile(ownerPath, JSON.stringify(newRecord, null, 2) + "\n", {
+      mode: 0o600,
+    });
+
+    await reloadOwnerStore();
+    expect(getOwnerSnapshot()).toEqual({
+      ownerContactId: 555,
+      ownerProfileSha256: sha,
+    });
+    expect(matches(555, sha)).toBe(true);
+  });
+
+  it("reloadOwnerStore resets to unbound when the file disappears", async () => {
+    await loadOwnerStore(ownerPath);
+    captureRescueCode();
+    const sha = "a".repeat(64);
+    await bindOwner(42, sha);
+    expect(matches(42, sha)).toBe(true);
+
+    await fs.rm(ownerPath, { force: true });
+    await reloadOwnerStore();
+    expect(getOwnerSnapshot()).toEqual({
+      ownerContactId: null,
+      ownerProfileSha256: null,
+    });
+    expect(matches(42, sha)).toBe(false);
+    // Hash cleared so verifyRescueCode fails until next bind/load.
+    expect(await verifyRescueCode("ANYCODE0")).toBe(false);
+  });
+
+  it("startOwnerStoreWatcher hot-reloads on external file rewrite", async () => {
+    await loadOwnerStore(ownerPath);
+    captureRescueCode();
+    __test_setReloadDebounceMs(5);
+    startOwnerStoreWatcher();
+
+    // External writer replaces owner.json (atomic write-then-rename, same as
+    // persist() does).
+    const sha = "9".repeat(64);
+    const tmp = `${ownerPath}.ext-tmp`;
+    await fs.writeFile(
+      tmp,
+      JSON.stringify(
+        {
+          ownerContactId: 777,
+          ownerProfileSha256: sha,
+          createdAt: new Date().toISOString(),
+          rescueCodeHash:
+            "$2b$12$0123456789012345678901uG5VzZGmI8kT0IEvB.XR5J0M0cWfwYyu",
+        },
+        null,
+        2,
+      ) + "\n",
+      { mode: 0o600 },
+    );
+    await fs.rename(tmp, ownerPath);
+
+    // Wait debounce + a slack margin for the async readRecord to land.
+    await sleep(80);
+
+    expect(matches(777, sha)).toBe(true);
+    stopOwnerStoreWatcher();
+  });
+
+  it("startOwnerStoreWatcher is idempotent", async () => {
+    await loadOwnerStore(ownerPath);
+    captureRescueCode();
+    startOwnerStoreWatcher();
+    // Calling twice must not throw and must not leak a second watcher.
+    expect(() => startOwnerStoreWatcher()).not.toThrow();
+    stopOwnerStoreWatcher();
+  });
+
+  it("startOwnerStoreWatcher throws if loadOwnerStore was not called first", () => {
+    // __test_reset() in beforeEach already nulled ownerFilePath; we just
+    // skip loadOwnerStore here to assert the guard.
+    expect(() => startOwnerStoreWatcher()).toThrow(/loadOwnerStore/);
   });
 
   it("db_wipe_then_repair_requires_rescue_code", async () => {
