@@ -253,6 +253,11 @@ export class Allowlist {
   private watcher: fsSync.FSWatcher | null = null;
   private reloadTimer: NodeJS.Timeout | null = null;
   private reloadDebounceMs = 50;
+  /**
+   * Tracks the in-flight `persistAsync()` chain so callers (admin CLI,
+   * tests) can `await flush()` to drain pending writes before exit.
+   */
+  private persistInFlight: Promise<void> = Promise.resolve();
 
   private static key(contactId: number, profileSha256: string): string {
     return `${contactId}:${profileSha256}`;
@@ -309,7 +314,8 @@ export class Allowlist {
 
   /**
    * Internal: atomic write-then-rename of the current map to disk at
-   * mode 0600. Fire-and-forget — caller never awaits.
+   * mode 0600. Fire-and-forget for callers; tracked via `persistInFlight`
+   * so admin tooling can `await flush()` before process exit.
    */
   private persistAsync(): void {
     const filePath = this.filePath;
@@ -318,7 +324,7 @@ export class Allowlist {
       version: 1,
       entries: Array.from(this.entries.values()),
     };
-    void (async () => {
+    this.persistInFlight = this.persistInFlight.then(async () => {
       try {
         await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
         const tmp = `${filePath}.tmp.${process.pid}.${Date.now()}`;
@@ -331,7 +337,16 @@ export class Allowlist {
       } catch (err) {
         log.error({ evt: "allowlist_persist_failed", error: String(err) });
       }
-    })();
+    });
+  }
+
+  /**
+   * Drain any in-flight `persistAsync()` writes. Admin CLI awaits this
+   * before exit so a `revoke` mutation reaches disk even when the
+   * process terminates immediately after the call.
+   */
+  async flush(): Promise<void> {
+    await this.persistInFlight;
   }
 
   /**
@@ -412,6 +427,34 @@ export class Allowlist {
     if (this.entries.delete(Allowlist.key(contactId, profileSha256))) {
       this.persistAsync();
     }
+  }
+
+  /**
+   * Remove every entry whose `contactId` matches, regardless of the
+   * `profileSha256`. Returns the number of entries removed.
+   *
+   * Admin CLI's `revoke` subcommand uses this — the operator only knows
+   * the contact id, not the profile sha. Persists once if anything was
+   * removed (single fire-and-forget write).
+   */
+  removeByContactId(contactId: number): number {
+    let removed = 0;
+    for (const [key, entry] of this.entries) {
+      if (entry.contactId === contactId) {
+        this.entries.delete(key);
+        removed++;
+      }
+    }
+    if (removed > 0) this.persistAsync();
+    return removed;
+  }
+
+  /**
+   * Diagnostic snapshot of every admitted entry. Returns a defensive
+   * copy so callers cannot mutate live state.
+   */
+  list(): AllowlistEntry[] {
+    return Array.from(this.entries.values()).map((e) => ({ ...e }));
   }
 }
 
