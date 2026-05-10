@@ -49,6 +49,7 @@
 
 import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
+import * as fsSync from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -94,6 +95,24 @@ let cache: OwnerCache = {
 let ownerFilePath: string | null = null;
 let rescueCodeHash: string | null = null;
 let createdAt: string | null = null;
+
+/**
+ * Hot-reload state.
+ *
+ * `watcher` is the live `fs.FSWatcher` on the owner.json's parent directory
+ * (we watch the dir, not the file, because atomic write-then-rename in
+ * `persist()` orphans file-level inotify/kqueue handles after the rename).
+ *
+ * `reloadTimer` debounces rapid event bursts — atomic rename on macOS/Linux
+ * fires a "rename" + "change" pair within ~ms; we coalesce them into a
+ * single re-read so the cache flips at most once per logical mutation.
+ *
+ * `reloadDebounceMs` is exposed so tests can lower it to keep timeouts tight
+ * (50ms is plenty in production; 5ms is enough for tests racing fs ops).
+ */
+let watcher: fsSync.FSWatcher | null = null;
+let reloadTimer: NodeJS.Timeout | null = null;
+let reloadDebounceMs = 50;
 
 /**
  * Default location of `owner.json` per plan §7.
@@ -385,14 +404,113 @@ export async function rotateAfterDemotion(): Promise<void> {
 }
 
 /**
+ * Re-read `owner.json` and update the synchronous in-memory cache.
+ *
+ * Called by the file watcher when `owner.json` changes on disk — e.g. when
+ * an external admin CLI rotates the rescue code or revokes an owner, or
+ * when another simplex MCP process bound an owner via `bind owner` while
+ * we held a stale cache. Idempotent: re-reading the same content leaves
+ * cache state unchanged.
+ *
+ * If the file is missing (operator wiped it for genesis recovery), the
+ * cache resets to unbound and `rescueCodeHash` is cleared so
+ * `verifyRescueCode` fails until the next external mint or a fresh
+ * `loadOwnerStore` call.
+ *
+ * Errors (malformed JSON, permission, etc.) are logged but never thrown —
+ * the cache stays at its last good state. The watcher will retry on the
+ * next change event.
+ */
+export async function reloadOwnerStore(): Promise<void> {
+  if (ownerFilePath === null) return;
+  try {
+    const existing = await readRecord(ownerFilePath);
+    if (existing) {
+      cache = {
+        ownerContactId: existing.ownerContactId,
+        ownerProfileSha256: existing.ownerProfileSha256,
+      };
+      rescueCodeHash = existing.rescueCodeHash;
+      createdAt = existing.createdAt;
+      log.info({
+        evt: "owner_store_reloaded",
+        bound: existing.ownerContactId !== null,
+      });
+    } else {
+      cache = { ownerContactId: null, ownerProfileSha256: null };
+      rescueCodeHash = null;
+      log.warn({ evt: "owner_store_file_missing" });
+    }
+  } catch (err) {
+    log.error({ evt: "owner_store_reload_failed", error: String(err) });
+  }
+}
+
+/**
+ * Install an `fs.watch` on `owner.json`'s parent directory and re-read on
+ * every change event matching the file basename. Idempotent — second call
+ * is a no-op.
+ *
+ * We watch the parent directory, not the file itself, because the atomic
+ * write-then-rename pattern in `persist()` orphans a file-level watcher:
+ * after `rename()` the inode the watcher held is gone and no further
+ * events arrive on it.
+ *
+ * Multiple events fired by a single atomic write are coalesced via the
+ * `reloadDebounceMs` timer; the cache flips at most once per logical
+ * mutation.
+ */
+export function startOwnerStoreWatcher(): void {
+  if (watcher) return;
+  if (ownerFilePath === null) {
+    throw new Error("startOwnerStoreWatcher: loadOwnerStore() must run first");
+  }
+  const dir = path.dirname(ownerFilePath);
+  const target = path.basename(ownerFilePath);
+  watcher = fsSync.watch(dir, { persistent: false }, (_eventType, name) => {
+    if (name !== target) return;
+    if (reloadTimer) clearTimeout(reloadTimer);
+    reloadTimer = setTimeout(() => {
+      reloadTimer = null;
+      void reloadOwnerStore();
+    }, reloadDebounceMs);
+  });
+  log.info({ evt: "owner_store_watcher_started", dir });
+}
+
+/** Tear down the watcher and any pending debounce timer. Idempotent. */
+export function stopOwnerStoreWatcher(): void {
+  if (watcher) {
+    watcher.close();
+    watcher = null;
+  }
+  if (reloadTimer) {
+    clearTimeout(reloadTimer);
+    reloadTimer = null;
+  }
+}
+
+/**
+ * Test seam: lower the debounce so race tests stay fast. Production never
+ * calls this. Returns the previous value so tests can restore.
+ */
+export function __test_setReloadDebounceMs(ms: number): number {
+  const prev = reloadDebounceMs;
+  reloadDebounceMs = ms;
+  return prev;
+}
+
+/**
  * Reset module-level state. Tests only — production code never calls this.
  *
  * Vitest reuses the module across test files in the same worker; without
  * a reset hook, tests would leak each other's owner cache.
  */
 export function __test_reset(): void {
+  stopOwnerStoreWatcher();
   cache = { ownerContactId: null, ownerProfileSha256: null };
   ownerFilePath = null;
   rescueCodeHash = null;
   createdAt = null;
+  reloadDebounceMs = 50;
 }
