@@ -71,14 +71,17 @@ const { installBindHandler } = await import("./owner/bind.js");
 const { installContactUpdatedDemotion } = await import("./simplex/profile.js");
 const { log } = await import("./util/log.js");
 
-// Pair-code store and allowlist live for the lifetime of the process. The
-// allowlist is intentionally non-persistent: a process restart re-pairs from
-// scratch (acceptable trade-off — rescue code remains as the recovery path).
+// Pair-code store stays in-memory (5min TTL — restart-recoverable). The
+// allowlist is loaded from ~/.claude/channels/simplex/allowlist.json so
+// admitted contacts survive restarts; a sibling fs.watch keeps the
+// in-memory map in sync with external mutations (admin CLI, slash commands).
 const pairCodeStore = new PairCodeStore();
 const allowlist = new Allowlist();
 
 await loadOwnerStore();
 startOwnerStoreWatcher();
+await allowlist.loadFromDisk();
+allowlist.startWatcher();
 
 const adapter = await startSimplexAdapter({
   onReady: (payload) => {
