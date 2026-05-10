@@ -1,0 +1,14 @@
+{
+  "name": "simplex",
+  "description": "SimpleX Chat channel for Claude Code — 1:1 messaging bridge with owner binding (bcrypt-hashed rescue code) and a non-owner allowlist.",
+  "version": "0.1.0",
+  "keywords": ["simplex", "messaging", "channel", "mcp"],
+  "author": {
+    "name": "Grégoire Compagnon",
+    "email": "obeone@obeone.org"
+  },
+  "repository": "https://github.com/obeone/claude-simplex-channel",
+  "channels": [
+    { "server": "simplex" }
+  ]
+}

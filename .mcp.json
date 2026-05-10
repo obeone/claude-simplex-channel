@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "simplex": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/claude-simplex-channel",
+      "args": []
+    }
+  }
+}
