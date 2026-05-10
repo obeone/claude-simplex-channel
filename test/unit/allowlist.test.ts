@@ -164,6 +164,51 @@ describe("Allowlist persistence", () => {
     a.stopWatcher();
   });
 
+  it("removeByContactId drops every entry for the contactId and persists once", async () => {
+    const a = new Allowlist();
+    await a.loadFromDisk(listPath);
+    a.add({ contactId: 5, profileSha256: SHA("a"), admittedAt: "x" });
+    a.add({ contactId: 5, profileSha256: SHA("b"), admittedAt: "y" });
+    a.add({ contactId: 6, profileSha256: SHA("c"), admittedAt: "z" });
+    await a.flush();
+
+    const removed = a.removeByContactId(5);
+    expect(removed).toBe(2);
+    await a.flush();
+
+    const raw = JSON.parse(await fs.readFile(listPath, "utf8")) as AllowlistFile;
+    expect(raw.entries).toHaveLength(1);
+    expect(raw.entries[0].contactId).toBe(6);
+
+    // Idempotent — second call finds nothing to drop, returns 0, no write churn.
+    expect(a.removeByContactId(5)).toBe(0);
+  });
+
+  it("list returns a defensive copy of every entry", async () => {
+    const a = new Allowlist();
+    await a.loadFromDisk(listPath);
+    a.add({ contactId: 1, profileSha256: SHA("a"), admittedAt: "x" });
+    a.add({ contactId: 2, profileSha256: SHA("b"), admittedAt: "y" });
+
+    const snapshot = a.list();
+    expect(snapshot).toHaveLength(2);
+    // Mutating the snapshot must not affect live state.
+    snapshot[0].contactId = 999;
+    expect(a.hasContactId(1)).toBe(true);
+    expect(a.hasContactId(999)).toBe(false);
+  });
+
+  it("flush awaits in-flight persistAsync writes", async () => {
+    const a = new Allowlist();
+    await a.loadFromDisk(listPath);
+    a.add({ contactId: 7, profileSha256: SHA("a"), admittedAt: "x" });
+    // Without flush, the file may not exist yet on a fast machine.
+    await a.flush();
+    const raw = JSON.parse(await fs.readFile(listPath, "utf8")) as AllowlistFile;
+    expect(raw.entries).toHaveLength(1);
+    expect(raw.entries[0].contactId).toBe(7);
+  });
+
   it("startWatcher is idempotent and throws if loadFromDisk was not called", async () => {
     const a = new Allowlist();
     expect(() => a.startWatcher()).toThrow(/loadFromDisk/);
