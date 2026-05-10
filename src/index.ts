@@ -148,9 +148,11 @@ const forwardChat = (msg: InboundMsg): Action => {
     .notification({
       method: "notifications/claude/channel",
       params: {
-        chat_id: String(msg.from.contactId),
-        text: msg.text,
-        meta: { kind: "chat", contact_id: msg.from.contactId },
+        content: msg.text,
+        meta: {
+          chat_id: String(msg.from.contactId),
+          kind: "chat",
+        },
       },
     })
     .catch((err: unknown) => {
