@@ -64,8 +64,7 @@ describe("Allowlist persistence", () => {
       admittedAt: "2026-05-10T12:00:00.000Z",
     });
 
-    // Wait for the fire-and-forget write.
-    await sleep(20);
+    await a.flush();
     const stat = await fs.stat(listPath);
     expect(stat.mode & 0o777).toBe(0o600);
 
@@ -85,10 +84,8 @@ describe("Allowlist persistence", () => {
     await a.loadFromDisk(listPath);
     a.add({ contactId: 1, profileSha256: SHA("a"), admittedAt: "x" });
     a.add({ contactId: 2, profileSha256: SHA("b"), admittedAt: "y" });
-    await sleep(20);
-
     a.remove(1, SHA("a"));
-    await sleep(20);
+    await a.flush();
 
     const raw = JSON.parse(await fs.readFile(listPath, "utf8")) as AllowlistFile;
     expect(raw.entries).toHaveLength(1);
@@ -96,7 +93,7 @@ describe("Allowlist persistence", () => {
 
     // Removing an unknown tuple is a no-op (no throw, no rewrite churn).
     a.remove(99, SHA("z"));
-    await sleep(20);
+    await a.flush();
     const raw2 = JSON.parse(await fs.readFile(listPath, "utf8")) as AllowlistFile;
     expect(raw2.entries).toHaveLength(1);
   });
@@ -128,7 +125,7 @@ describe("Allowlist persistence", () => {
     const a = new Allowlist();
     await a.loadFromDisk(listPath);
     a.add({ contactId: 1, profileSha256: SHA("a"), admittedAt: "x" });
-    await sleep(20);
+    await a.flush();
 
     // Corrupt the file out of band.
     await fs.writeFile(listPath, "{ not json", { mode: 0o600 });
@@ -159,7 +156,9 @@ describe("Allowlist persistence", () => {
     await fs.writeFile(tmp, JSON.stringify(file, null, 2) + "\n", { mode: 0o600 });
     await fs.rename(tmp, listPath);
 
-    await sleep(80);
+    // 5ms debounce + fs.watch latency; give it a generous 250ms under
+    // load (full-suite runs are slower than the isolated file).
+    await sleep(250);
     expect(a.hasContactId(88)).toBe(true);
     a.stopWatcher();
   });
