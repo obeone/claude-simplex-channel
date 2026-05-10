@@ -1,12 +1,31 @@
 #!/usr/bin/env sh
 # claude-simplex-channel — POSIX wrapper.
 #
-# Performs the kernel-level fd dance BEFORE exec'ing Node so that:
-#   - fd 3 holds the ORIGINAL stdout (the MCP frame channel).
-#   - fd 1 is collapsed onto fd 2, so any write to stdout (from libc, the
-#     Haskell RTS, OpenSSL, SQLite, or rogue console.log) lands on stderr
-#     instead of corrupting the MCP frame stream.
+# Two modes, dispatched on the first argument:
 #
-# This is the kernel-level half of the stdout-purity invariant; the JS-level
-# half (`assertStdoutGate()` + SDK transport on fd 3) lives in src/index.ts.
-exec node "$(dirname "$0")/../dist/index.js" 3>&1 1>&2
+#   admin <subcommand> [...args]
+#       Run the admin CLI (`dist/admin/cli.js`). No MCP transport, no
+#       SimpleX adapter, no fd dance. Prints JSON on stdout, banners on
+#       stderr.
+#
+#   (no args, default)
+#       Start the MCP stdio server. Performs the kernel-level fd dance
+#       BEFORE exec'ing Node so:
+#         - fd 3 holds the ORIGINAL stdout (the MCP frame channel).
+#         - fd 1 is collapsed onto fd 2 — any write to stdout from libc,
+#           the Haskell RTS, OpenSSL, SQLite, or rogue console.log lands
+#           on stderr instead of corrupting the MCP frame stream.
+#       This is the kernel-level half of the stdout-purity invariant; the
+#       JS-level half (`assertStdoutGate()` + SDK transport on fd 3)
+#       lives in src/index.ts.
+DIR="$(dirname "$0")"
+
+case "${1:-}" in
+  admin)
+    shift
+    exec node "$DIR/../dist/admin/cli.js" "$@"
+    ;;
+  *)
+    exec node "$DIR/../dist/index.js" 3>&1 1>&2
+    ;;
+esac
