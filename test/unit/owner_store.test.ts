@@ -31,6 +31,7 @@ import {
   matches,
   reloadOwnerStore,
   rotateAfterDemotion,
+  rotateRescueCodeOnly,
   startOwnerStoreWatcher,
   stopOwnerStoreWatcher,
   verifyRescueCode,
@@ -162,6 +163,35 @@ describe("owner store", () => {
     const newCode = (matched as RegExpMatchArray)[1];
     expect(newCode).toMatch(CROCKFORD_RE);
     expect(await verifyRescueCode(newCode)).toBe(true);
+  });
+
+  it("rotateRescueCodeOnly preserves the bound owner and rotates the code", async () => {
+    await loadOwnerStore(ownerPath);
+    const firstCode = captureRescueCode();
+    const sha = "8".repeat(64);
+    await bindOwner(321, sha);
+    expect(matches(321, sha)).toBe(true);
+    stderrWrites.length = 0;
+
+    // Bind already rotated once — clear and rotate again via the new path.
+    await rotateRescueCodeOnly();
+
+    // Owner stays bound.
+    expect(matches(321, sha)).toBe(true);
+    // Banner uses the same rotation format.
+    const rotation = stderrWrites.find((w) => w.includes("New rescue code"));
+    expect(rotation, "rotation banner missing").toBeDefined();
+    const m = (rotation as string).match(ROTATION_BANNER_RE);
+    expect(m, `rotation banner did not match: ${rotation}`).not.toBeNull();
+    const rotated = (m as RegExpMatchArray)[1];
+    expect(rotated).toMatch(CROCKFORD_RE);
+    expect(rotated).not.toBe(firstCode);
+    expect(await verifyRescueCode(rotated)).toBe(true);
+
+    // The on-disk record reflects both: owner still bound, new hash.
+    const raw = JSON.parse(await fs.readFile(ownerPath, "utf8"));
+    expect(raw.ownerContactId).toBe(321);
+    expect(raw.ownerProfileSha256).toBe(sha);
   });
 
   // --- Verbatim plan-mandated tests below -----------------------------------

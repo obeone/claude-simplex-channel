@@ -379,6 +379,34 @@ export function clearOwnerSync(): void {
 }
 
 /**
+ * Rotate the rescue code while keeping the bound owner intact.
+ *
+ * Operator-facing recovery path: the original rescue code was lost (only
+ * printed once on stderr at first launch), but the owner is already bound.
+ * Mints a fresh code, re-bcrypts, persists `owner.json` with the SAME
+ * `ownerContactId` / `ownerProfileSha256`, and prints the new code on
+ * stderr in the rotation banner.
+ *
+ * Distinct from `rotateAfterDemotion()` which clears the owner tuple.
+ */
+export async function rotateRescueCodeOnly(): Promise<void> {
+  if (ownerFilePath === null || createdAt === null) {
+    throw new Error("owner store not loaded — call loadOwnerStore() first");
+  }
+  const { plain, hash } = await mintRescueCode();
+  rescueCodeHash = hash;
+  const record: OwnerRecord = {
+    ownerContactId: cache.ownerContactId,
+    ownerProfileSha256: cache.ownerProfileSha256,
+    createdAt,
+    rescueCodeHash: hash,
+  };
+  await persist(ownerFilePath, record);
+  writeRescueCodeOnce(plain, "rotation");
+  log.info({ evt: "rescue_code_rotated", bound: cache.ownerContactId !== null });
+}
+
+/**
  * Background rotation after `clearOwnerSync()` (PR 9).
  *
  * Mints a new rescue code, persists owner.json with both tuple fields
