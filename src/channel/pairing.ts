@@ -351,12 +351,15 @@ export function installPairingHandlers(deps: PairingDeps): void {
       });
     }
     await notify("notifications/claude/channel", {
+      content:
+        `New SimpleX contact ${contact.contactId} requested pairing. ` +
+        `Operator must DM the pair code back from the owner contact.`,
       meta: {
         kind: "pairing_prompt",
         // Plan §8 step 5: pair_code carried in MCP meta (informational).
         // The instructions string forbids Claude from echoing it via reply.
         pair_code: entry.code,
-        contact_id: contact.contactId,
+        contact_id: String(contact.contactId),
       },
     });
     log.info({ evt: "pair_prompt_sent", contact_id: contact.contactId });
@@ -395,6 +398,8 @@ export function installPairingHandlers(deps: PairingDeps): void {
         );
         log.warn({ evt: "pair_code_collision", code: result.code });
         await notify("notifications/claude/channel", {
+          content:
+            "Pair code collision detected; both outstanding requests rejected.",
           meta: { kind: "pairing_collision", code: result.code },
         });
         continue;
@@ -417,9 +422,10 @@ export function installPairingHandlers(deps: PairingDeps): void {
         contact_id: admitted.contactId,
       });
       await notify("notifications/claude/channel", {
+        content: `Contact ${admitted.contactId} admitted to allowlist via pair code.`,
         meta: {
           kind: "pairing_admitted",
-          contact_id: admitted.contactId,
+          contact_id: String(admitted.contactId),
         },
       });
     }
