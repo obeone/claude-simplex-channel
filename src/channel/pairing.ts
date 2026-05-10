@@ -25,6 +25,10 @@
  * without an MCP transport, and decoupled from worker-mcp's namespace.
  */
 import { randomInt } from "node:crypto";
+import * as fs from "node:fs/promises";
+import * as fsSync from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { ChatApi } from "simplex-chat/dist/api.js";
 import { T, type CEvt } from "@simplex-chat/types";
 
@@ -205,25 +209,175 @@ export class PairCodeStore {
   }
 }
 
+/** On-disk shape of `allowlist.json`. */
+export interface AllowlistFile {
+  version: 1;
+  entries: AllowlistEntry[];
+}
+
+/** Default location of `allowlist.json` — sibling of `owner.json`. */
+export function defaultAllowlistFilePath(): string {
+  return path.join(
+    os.homedir(),
+    ".claude",
+    "channels",
+    "simplex",
+    "allowlist.json",
+  );
+}
+
 /**
- * In-memory allowlist of admitted (non-owner) contact tuples.
+ * Allowlist of admitted (non-owner) contact tuples — persistent.
  *
  * The strict owner check still lives in `src/owner/store.ts`; this
- * allowlist is the coarse gate from plan §8 step 8a (`ownerGate`). For PR 5
- * the only writer is `consumePairCodeFromOwner` after a successful match.
+ * allowlist is the coarse gate from plan §8 step 8a (`ownerGate`).
  *
- * No persistence in v1: a process restart re-pairs from scratch (acceptable
- * trade-off; the rescue code path remains).
+ * Persistence (added post-v1):
+ *   - `loadFromDisk(filePath)` hydrates the in-memory map and remembers
+ *     the path for subsequent writes.
+ *   - `add()` / `remove()` stay synchronous; they update the in-memory
+ *     map and fire-and-forget a write to `allowlist.json` (atomic
+ *     write-then-rename, mode 0600). On write failure the in-memory state
+ *     stands and the failure is logged — the next restart loses the
+ *     unpersisted change, which is acceptable (rescue code remains).
+ *   - `startWatcher()` installs an `fs.watch` on the file's parent
+ *     directory and re-reads the file on every change matching the
+ *     basename, with a 50ms debounce to coalesce atomic-rename pairs.
+ *
+ * If `loadFromDisk` is never called (tests), the instance behaves
+ * exactly like the previous in-memory-only implementation.
  */
 export class Allowlist {
-  private readonly entries = new Map<string, AllowlistEntry>();
+  private entries = new Map<string, AllowlistEntry>();
+  private filePath: string | null = null;
+  private watcher: fsSync.FSWatcher | null = null;
+  private reloadTimer: NodeJS.Timeout | null = null;
+  private reloadDebounceMs = 50;
 
   private static key(contactId: number, profileSha256: string): string {
     return `${contactId}:${profileSha256}`;
   }
 
+  /**
+   * Hydrate from disk if the file exists; otherwise start empty. Records
+   * the file path so subsequent `add()` / `remove()` writes target it.
+   *
+   * Idempotent: calling twice with the same path replaces the in-memory
+   * map with whatever is on disk now. Calling with a different path is
+   * not supported (would be a programming error).
+   */
+  async loadFromDisk(filePath?: string): Promise<void> {
+    this.filePath = filePath ?? defaultAllowlistFilePath();
+    // Ensure the parent dir exists so the watcher can attach even when
+    // the allowlist file itself does not yet exist (first run).
+    await fs.mkdir(path.dirname(this.filePath), { recursive: true, mode: 0o700 });
+    await this.readFromDisk();
+  }
+
+  /**
+   * Internal: read the file (if any) and replace the in-memory map.
+   * Called by `loadFromDisk` and by the watcher. Errors are logged but
+   * never thrown — the cache holds at its last good state.
+   */
+  private async readFromDisk(): Promise<void> {
+    if (this.filePath === null) return;
+    try {
+      const raw = await fs.readFile(this.filePath, "utf8");
+      const parsed = JSON.parse(raw) as AllowlistFile;
+      if (parsed.version !== 1 || !Array.isArray(parsed.entries)) {
+        log.error({
+          evt: "allowlist_malformed",
+          path: this.filePath,
+        });
+        return;
+      }
+      const next = new Map<string, AllowlistEntry>();
+      for (const entry of parsed.entries) {
+        next.set(Allowlist.key(entry.contactId, entry.profileSha256), entry);
+      }
+      this.entries = next;
+      log.info({ evt: "allowlist_loaded", count: next.size });
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        // First run: no file yet. Stay empty; first add() persists.
+        this.entries = new Map();
+        return;
+      }
+      log.error({ evt: "allowlist_read_failed", error: String(err) });
+    }
+  }
+
+  /**
+   * Internal: atomic write-then-rename of the current map to disk at
+   * mode 0600. Fire-and-forget — caller never awaits.
+   */
+  private persistAsync(): void {
+    const filePath = this.filePath;
+    if (filePath === null) return;
+    const snapshot: AllowlistFile = {
+      version: 1,
+      entries: Array.from(this.entries.values()),
+    };
+    void (async () => {
+      try {
+        await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+        const tmp = `${filePath}.tmp.${process.pid}.${Date.now()}`;
+        await fs.writeFile(
+          tmp,
+          JSON.stringify(snapshot, null, 2) + "\n",
+          { mode: 0o600 },
+        );
+        await fs.rename(tmp, filePath);
+      } catch (err) {
+        log.error({ evt: "allowlist_persist_failed", error: String(err) });
+      }
+    })();
+  }
+
+  /**
+   * Watch the parent directory for changes to `allowlist.json` and
+   * re-read on every event matching the basename. Debounced 50ms.
+   */
+  startWatcher(): void {
+    if (this.watcher) return;
+    if (this.filePath === null) {
+      throw new Error("startWatcher: loadFromDisk() must run first");
+    }
+    const dir = path.dirname(this.filePath);
+    const target = path.basename(this.filePath);
+    this.watcher = fsSync.watch(dir, { persistent: false }, (_eventType, name) => {
+      if (name !== target) return;
+      if (this.reloadTimer) clearTimeout(this.reloadTimer);
+      this.reloadTimer = setTimeout(() => {
+        this.reloadTimer = null;
+        void this.readFromDisk();
+      }, this.reloadDebounceMs);
+    });
+    log.info({ evt: "allowlist_watcher_started", dir });
+  }
+
+  /** Tear down the watcher and any pending debounce timer. Idempotent. */
+  stopWatcher(): void {
+    if (this.watcher) {
+      this.watcher.close();
+      this.watcher = null;
+    }
+    if (this.reloadTimer) {
+      clearTimeout(this.reloadTimer);
+      this.reloadTimer = null;
+    }
+  }
+
+  /** Test seam — production never calls this. */
+  __test_setReloadDebounceMs(ms: number): number {
+    const prev = this.reloadDebounceMs;
+    this.reloadDebounceMs = ms;
+    return prev;
+  }
+
   add(entry: AllowlistEntry): void {
     this.entries.set(Allowlist.key(entry.contactId, entry.profileSha256), entry);
+    this.persistAsync();
   }
 
   has(contactId: number, profileSha256: string): boolean {
@@ -255,7 +409,9 @@ export class Allowlist {
   }
 
   remove(contactId: number, profileSha256: string): void {
-    this.entries.delete(Allowlist.key(contactId, profileSha256));
+    if (this.entries.delete(Allowlist.key(contactId, profileSha256))) {
+      this.persistAsync();
+    }
   }
 }
 
