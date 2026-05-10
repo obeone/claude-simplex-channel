@@ -7,7 +7,10 @@
  *      addon at module-load time in some environments).
  *   2. Load the owner store synchronously into the in-memory cache so the
  *      MCP `reply` tool's allowlist gate and the inbound router can decide
- *      on the same event-loop turn — no async I/O on the hot path.
+ *      on the same event-loop turn — no async I/O on the hot path. Then
+ *      install the `owner.json` watcher so external mutations (admin CLI,
+ *      another simplex MCP process, manual edit) are reflected in-cache
+ *      without a respawn.
  *   3. Bring up the SimpleX adapter. This loads the native addon (after the
  *      stdout fence is in place) and returns the live `ChatApi` handle the
  *      `reply` tool needs to emit `apiSendMessages`.
@@ -48,7 +51,7 @@ assertStdoutGate();
 
 // Steps 2-5: lazy imports keep the simplex-chat addon load AFTER the gate.
 const ownerStore = await import("./owner/store.js");
-const { loadOwnerStore, getOwnerSnapshot } = ownerStore;
+const { loadOwnerStore, getOwnerSnapshot, startOwnerStoreWatcher } = ownerStore;
 const { startSimplexAdapter } = await import("./simplex/adapter.js");
 const { StdioServerTransport } = await import(
   "@modelcontextprotocol/sdk/server/stdio.js"
@@ -75,6 +78,7 @@ const pairCodeStore = new PairCodeStore();
 const allowlist = new Allowlist();
 
 await loadOwnerStore();
+startOwnerStoreWatcher();
 
 const adapter = await startSimplexAdapter({
   onReady: (payload) => {
